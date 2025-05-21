@@ -206,139 +206,199 @@ def heygen_avatar_component(access_token, avatar_id, voice_id, height=500, chara
     # Create a unique div id for this avatar instance
     div_id = f"avatar-container-{character}"
     
-    # JavaScript for initializing the avatar
+    # JavaScript for initializing the avatar - Fixed version with more debugging
     component_html = f"""
-    <script src="https://cdn.jsdelivr.net/npm/@heygen/streaming-avatar@latest/dist/index.umd.js"></script>
-    <div id="{div_id}" style="width: 100%; height: {height}px; background-color: #000; position: relative; border-radius: 8px; overflow: hidden;"></div>
-    
-    <script>
-        // Define a global function to send text to the avatar
-        window.speakText_{character} = function(text) {{
-            if (window.streamingAvatar_{character}) {{
-                window.streamingAvatar_{character}.speak({{ text: text, task_type: "REPEAT" }});
-                return true;
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>HeyGen Avatar</title>
+        <style>
+            #container {{
+                width: 100%;
+                height: {height}px;
+                background-color: #000;
+                position: relative;
+                border-radius: 8px;
+                overflow: hidden;
             }}
-            return false;
-        }};
+            #status {{
+                position: absolute;
+                bottom: 10px;
+                left: 10px;
+                background-color: rgba(0, 0, 0, 0.6);
+                color: white;
+                padding: 5px 10px;
+                border-radius: 4px;
+                font-size: 12px;
+                font-family: sans-serif;
+            }}
+            #error {{
+                color: red;
+                margin: 10px;
+                font-family: sans-serif;
+            }}
+        </style>
+    </head>
+    <body>
+        <div id="container">
+            <div id="status">Loading SDK...</div>
+        </div>
+        <div id="error"></div>
         
-        // Initialize the avatar
-        async function initializeAvatar_{character}() {{
-            try {{
-                console.log("Initializing {character} avatar...");
-                
-                // Create the streaming avatar instance
-                window.streamingAvatar_{character} = new window.StreamingAvatar({{
-                    token: "{access_token}"
+        <script>
+            const errorDiv = document.getElementById('error');
+            const statusDiv = document.getElementById('status');
+            
+            // Debug info
+            console.log("Starting initialization for {character} avatar");
+            statusDiv.innerText = "Loading SDK...";
+            
+            // First, load the SDK from CDN
+            function loadScript(url) {{
+                return new Promise((resolve, reject) => {{
+                    const script = document.createElement('script');
+                    script.src = url;
+                    script.async = true;
+                    script.onload = resolve;
+                    script.onerror = reject;
+                    document.body.appendChild(script);
                 }});
-                
-                // Set up event listeners
-                window.streamingAvatar_{character}.on("STREAM_READY", (event) => {{
-                    console.log("{character} avatar stream ready", event);
-                    document.getElementById("{div_id}_status").innerText = "Connected";
-                }});
-                
-                window.streamingAvatar_{character}.on("STREAM_DISCONNECTED", () => {{
-                    console.log("{character} avatar stream disconnected");
-                    document.getElementById("{div_id}_status").innerText = "Disconnected";
-                }});
-                
-                window.streamingAvatar_{character}.on("AVATAR_START_TALKING", () => {{
-                    console.log("{character} avatar started talking");
-                    document.getElementById("{div_id}_status").innerText = "Speaking...";
-                }});
-                
-                window.streamingAvatar_{character}.on("AVATAR_STOP_TALKING", () => {{
-                    console.log("{character} avatar stopped talking");
-                    document.getElementById("{div_id}_status").innerText = "Connected";
+            }}
+            
+            // Initialize the avatar
+            async function initializeAvatar() {{
+                try {{
+                    await loadScript('https://cdn.jsdelivr.net/npm/@heygen/streaming-avatar@2.0.14/dist/index.umd.js');
+                    statusDiv.innerText = "SDK loaded, initializing avatar...";
+                    console.log("SDK loaded for {character}");
                     
-                    // Notify Python that the avatar has stopped talking
-                    if (window.parent) {{
-                        window.parent.postMessage({{
-                            type: "avatar_done_speaking",
-                            character: "{character}"
-                        }}, "*");
+                    // Verify SDK is loaded
+                    if (typeof StreamingAvatar === 'undefined') {{
+                        throw new Error("StreamingAvatar is not defined after loading script");
                     }}
-                }});
-                
-                // Create and start the avatar session
-                console.log("Creating avatar session for {character}...");
-                const sessionInfo = await window.streamingAvatar_{character}.createStartAvatar({{
-                    quality: "Medium",
-                    avatarName: "{avatar_id}",
-                    voice: {{
-                        voiceId: "{voice_id}"
-                    }}
-                }});
-                
-                console.log("{character} avatar session created:", sessionInfo);
-                
-                // Add avatar video to the container
-                const videoElement = document.createElement("video");
-                videoElement.style.width = "100%";
-                videoElement.style.height = "100%";
-                videoElement.style.objectFit = "cover";
-                videoElement.autoplay = true;
-                videoElement.muted = false;
-                document.getElementById("{div_id}").appendChild(videoElement);
-                
-                // Add status indicator
-                const statusElement = document.createElement("div");
-                statusElement.id = "{div_id}_status";
-                statusElement.innerText = "Initializing...";
-                statusElement.style.position = "absolute";
-                statusElement.style.bottom = "10px";
-                statusElement.style.left = "10px";
-                statusElement.style.backgroundColor = "rgba(0, 0, 0, 0.6)";
-                statusElement.style.color = "white";
-                statusElement.style.padding = "5px 10px";
-                statusElement.style.borderRadius = "4px";
-                statusElement.style.fontSize = "12px";
-                document.getElementById("{div_id}").appendChild(statusElement);
-                
-                // Connect the video stream to the video element
-                if (sessionInfo && sessionInfo.url) {{
-                    // You may need to use LiveKit or other WebRTC library to connect the stream
-                    console.log("Would connect to stream at:", sessionInfo.url);
-                    // For demo purposes, show a placeholder message
-                    videoElement.poster = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' viewBox='0 0 800 450'%3E%3Crect fill='%23000000' width='800' height='450'/%3E%3Ctext x='400' y='225' font-family='Arial' font-size='30' fill='white' text-anchor='middle' dominant-baseline='middle'%3E{character.upper()} AVATAR STREAM%3C/text%3E%3C/svg%3E";
-                }}
-                
-                // Notify Python that the avatar is ready
-                if (window.parent) {{
-                    window.parent.postMessage({{
-                        type: "avatar_ready",
-                        character: "{character}"
-                    }}, "*");
-                }}
-                
-            }} catch (error) {{
-                console.error("Error initializing {character} avatar:", error);
-                const errorElement = document.createElement("div");
-                errorElement.innerText = "Error: " + error.message;
-                errorElement.style.color = "red";
-                errorElement.style.padding = "10px";
-                document.getElementById("{div_id}").appendChild(errorElement);
-                
-                // Notify Python about the error
-                if (window.parent) {{
-                    window.parent.postMessage({{
-                        type: "avatar_error",
-                        character: "{character}",
-                        error: error.message
-                    }}, "*");
+                    
+                    // Create the streaming avatar instance
+                    const avatar = new StreamingAvatar({{
+                        token: "{access_token}"
+                    }});
+                    
+                    window.avatar_{character} = avatar;
+                    console.log("Avatar instance created");
+                    
+                    // Set up event listeners
+                    avatar.on("STREAM_READY", (event) => {{
+                        console.log("Stream ready event:", event);
+                        statusDiv.innerText = "Connected";
+                    }});
+                    
+                    avatar.on("STREAM_DISCONNECTED", () => {{
+                        console.log("Stream disconnected");
+                        statusDiv.innerText = "Disconnected";
+                    }});
+                    
+                    avatar.on("AVATAR_START_TALKING", () => {{
+                        console.log("Avatar started talking");
+                        statusDiv.innerText = "Speaking...";
+                    }});
+                    
+                    avatar.on("AVATAR_STOP_TALKING", () => {{
+                        console.log("Avatar stopped talking");
+                        statusDiv.innerText = "Connected";
+                    }});
+                    
+                    // Create and start the avatar session
+                    statusDiv.innerText = "Creating avatar session...";
+                    console.log("Starting avatar creation with:", {{
+                        quality: "Medium",
+                        avatarName: "{avatar_id}",
+                        voice: {{ voiceId: "{voice_id}" }}
+                    }});
+                    
+                    const sessionInfo = await avatar.createStartAvatar({{
+                        quality: "Medium",
+                        avatarName: "{avatar_id}",
+                        voice: {{
+                            voiceId: "{voice_id}"
+                        }}
+                    }});
+                    
+                    console.log("Session created:", sessionInfo);
+                    statusDiv.innerText = "Avatar ready";
+                    
+                    // Create global function to speak
+                    window.speakText_{character} = function(text) {{
+                        console.log("Speaking:", text);
+                        avatar.speak({{ text: text, task_type: "REPEAT" }});
+                    }};
+                    
+                    // Try a test message
+                    setTimeout(() => {{
+                        console.log("Testing avatar with greeting");
+                        avatar.speak({{ text: "Hello", task_type: "REPEAT" }});
+                    }}, 3000);
+                    
+                }} catch (error) {{
+                    console.error("Error initializing avatar:", error);
+                    errorDiv.innerText = "Error: " + error.message;
+                    statusDiv.innerText = "Initialization failed";
                 }}
             }}
-        }}
-        
-        // Initialize the avatar
-        initializeAvatar_{character}();
-    </script>
+            
+            // Start initialization
+            initializeAvatar();
+        </script>
+    </body>
+    </html>
     """
     
     # Render the HTML component
     components.html(component_html, height=height + 50)
     
     return True
+
+# Define prebriefing text ahead of time so it's available in scope
+PREBRIEF_TEXT = """
+Hello, I'm Noa Martinez, your Virtual Clinical Instructor for today's simulation. 
+
+In this scenario, you'll be playing the role of a public health nurse meeting with Sam Richards, 
+an Operations Manager at a County Corrections Facility. Your goal is to discuss and negotiate 
+the implementation of a new flu vaccination program for incarcerated individuals.
+
+Sam has been in his position for 14 years and tends to be resistant to change. He's defensive 
+of current processes and often focuses on problems rather than solutions. His communication style 
+can be challenging - he may interrupt you, use dismissive language, and rely on "we've always 
+done it this way" reasoning.
+
+Your objectives are to:
+1. Build rapport despite resistance
+2. Address concerns constructively
+3. Use data effectively to support your case
+4. Navigate the power dynamics
+5. Apply change management principles
+
+Remember to maintain your professionalism even when faced with resistance. Take notes on Sam's 
+objections so we can discuss them in the debriefing.
+
+Are you ready to begin the simulation?
+"""
+
+TRANSITION_TEXT = """
+Great! Remember your objectives and stay focused on your goal of implementing the 
+flu vaccination program. I'll be observing and we'll discuss your interaction afterwards. 
+Good luck with Sam!
+"""
+
+DEBRIEF_TEXT = """
+Great job completing the simulation! Let's take some time to reflect on your interaction with Sam.
+
+I noticed that Sam presented several barriers to implementing the flu vaccination program. 
+Let's discuss how you addressed these objections and what strategies were effective.
+
+What aspects of the interaction did you find most challenging? What approaches worked well 
+for you in addressing Sam's resistance?
+"""
 
 # UI elements and workflow functions
 def display_intro_page():
@@ -409,48 +469,43 @@ def display_prebrief_page():
         
         # Pre-briefing script
         if not st.session_state.conversation_history:
-            # Initial greeting
-            prebrief_text = """
-            Hello, I'm Noa Martinez, your Virtual Clinical Instructor for today's simulation. 
-            
-            In this scenario, you'll be playing the role of a public health nurse meeting with Sam Richards, 
-            an Operations Manager at a County Corrections Facility. Your goal is to discuss and negotiate 
-            the implementation of a new flu vaccination program for incarcerated individuals.
-            
-            Sam has been in his position for 14 years and tends to be resistant to change. He's defensive 
-            of current processes and often focuses on problems rather than solutions. His communication style 
-            can be challenging - he may interrupt you, use dismissive language, and rely on "we've always 
-            done it this way" reasoning.
-            
-            Your objectives are to:
-            1. Build rapport despite resistance
-            2. Address concerns constructively
-            3. Use data effectively to support your case
-            4. Navigate the power dynamics
-            5. Apply change management principles
-            
-            Remember to maintain your professionalism even when faced with resistance. Take notes on Sam's 
-            objections so we can discuss them in the debriefing.
-            
-            Are you ready to begin the simulation?
-            """
-            # Add to conversation but don't try to speak it yet
-            add_to_conversation(CHARACTER_NOA, prebrief_text)
+            # Add to conversation history
+            add_to_conversation(CHARACTER_NOA, PREBRIEF_TEXT)
     
-    # JavaScript to speak through the avatar using eval_js
+    # JavaScript to speak through the avatar
     if st.session_state.conversation_history and len(st.session_state.conversation_history) == 1:
-        # Run JavaScript to make the avatar speak
+        # Run JavaScript to make the avatar speak - using a simple approach without referring to an undefined variable
         components.html(
-            f"""
+            """
             <script>
-                function speakToAvatar() {{
-                    if (window.parent.speakText_noa) {{
-                        const text = {json.dumps(prebrief_text)};
-                        window.parent.speakText_noa(text);
-                    }}
-                }}
-                // Call after a short delay to ensure avatar is initialized
-                setTimeout(speakToAvatar, 2000);
+                function attemptToSpeak() {
+                    if (window.avatar_noa) {
+                        window.avatar_noa.speak({ 
+                            text: "Hello, I'm Noa Martinez, your Virtual Clinical Instructor for today's simulation.", 
+                            task_type: "REPEAT" 
+                        });
+                        return true;
+                    }
+                    return false;
+                }
+                
+                // Try multiple times in case the avatar isn't ready yet
+                let attempts = 0;
+                let maxAttempts = 10;
+                let success = false;
+                
+                function trySpeak() {
+                    if (attempts >= maxAttempts || success) return;
+                    
+                    success = attemptToSpeak();
+                    if (!success) {
+                        attempts++;
+                        setTimeout(trySpeak, 1000);
+                    }
+                }
+                
+                // Start trying after a delay
+                setTimeout(trySpeak, 3000);
             </script>
             """,
             height=0
@@ -479,12 +534,7 @@ def display_prebrief_page():
     # Button to start simulation
     if st.button("Start Simulation"):
         # Final instruction before simulation
-        transition_text = """
-        Great! Remember your objectives and stay focused on your goal of implementing the 
-        flu vaccination program. I'll be observing and we'll discuss your interaction afterwards. 
-        Good luck with Sam!
-        """
-        add_to_conversation(CHARACTER_NOA, transition_text)
+        add_to_conversation(CHARACTER_NOA, TRANSITION_TEXT)
         
         # Switch to simulation stage
         st.session_state.stage = STAGE_SIMULATION
@@ -516,26 +566,6 @@ def display_simulation_page():
             opening_lines = load_sam_responses()["opening"]
             opening_line = opening_lines[0]  # Use the first opening line
             add_to_conversation(CHARACTER_SAM, opening_line)
-    
-    # JavaScript to speak through the avatar using eval_js
-    if not any(entry["character"] == CHARACTER_SAM for entry in st.session_state.conversation_history[:-1]) and \
-       st.session_state.conversation_history[-1]["character"] == CHARACTER_SAM:
-        # Run JavaScript to make the avatar speak
-        components.html(
-            f"""
-            <script>
-                function speakToAvatar() {{
-                    if (window.parent.speakText_sam) {{
-                        const text = {json.dumps(st.session_state.conversation_history[-1]["text"])};
-                        window.parent.speakText_sam(text);
-                    }}
-                }}
-                // Call after a short delay to ensure avatar is initialized
-                setTimeout(speakToAvatar, 2000);
-            </script>
-            """,
-            height=0
-        )
     
     # Display conversation history
     display_conversation_history()
@@ -597,36 +627,7 @@ def display_debrief_page():
         
         # Initial debrief from Noa if this is the start of the debriefing
         if not any(entry["character"] == CHARACTER_NOA and "Great job" in entry["text"] for entry in st.session_state.conversation_history):
-            debrief_text = """
-            Great job completing the simulation! Let's take some time to reflect on your interaction with Sam.
-            
-            I noticed that Sam presented several barriers to implementing the flu vaccination program. 
-            Let's discuss how you addressed these objections and what strategies were effective.
-            
-            What aspects of the interaction did you find most challenging? What approaches worked well 
-            for you in addressing Sam's resistance?
-            """
-            add_to_conversation(CHARACTER_NOA, debrief_text)
-    
-    # JavaScript to speak through the avatar using eval_js
-    if not any(entry["character"] == CHARACTER_NOA and "Great job" in entry["text"] for entry in st.session_state.conversation_history[:-1]) and \
-       "Great job" in st.session_state.conversation_history[-1].get("text", ""):
-        # Run JavaScript to make the avatar speak
-        components.html(
-            f"""
-            <script>
-                function speakToAvatar() {{
-                    if (window.parent.speakText_noa) {{
-                        const text = {json.dumps(st.session_state.conversation_history[-1]["text"])};
-                        window.parent.speakText_noa(text);
-                    }}
-                }}
-                // Call after a short delay to ensure avatar is initialized
-                setTimeout(speakToAvatar, 2000);
-            </script>
-            """,
-            height=0
-        )
+            add_to_conversation(CHARACTER_NOA, DEBRIEF_TEXT)
     
     # Display conversation history
     display_conversation_history()
