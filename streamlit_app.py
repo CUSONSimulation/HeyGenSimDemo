@@ -65,13 +65,12 @@ def get_available_avatars():
         st.warning(f"Error fetching avatars: {str(e)}")
         return []
 
-def create_heygen_component(access_token, avatar_id, session_id, avatar_name, voice_config=None):
+def create_heygen_component(access_token, avatar_id, session_id, avatar_name, voice_id="default", voice_config=None):
     """Create HeyGen streaming avatar component using REST API approach with enhanced configuration"""
     
     # Default voice configuration based on SDK patterns
     if voice_config is None:
         voice_config = {
-            "voice_id": "default",
             "rate": 1.0,
             "emotion": "friendly"
         }
@@ -280,7 +279,7 @@ def create_heygen_component(access_token, avatar_id, session_id, avatar_name, vo
                             avatar_name: '{avatar_id}',
                             quality: 'low',
                             voice: {{
-                                voice_id: '{voice_config.get("voice_id", "default")}',
+                                voice_id: '{voice_id}',
                                 rate: {voice_config.get("rate", 1.0)},
                                 emotion: '{voice_config.get("emotion", "friendly")}'
                             }},
@@ -478,30 +477,35 @@ def main():
         st.info("Please check your HeyGen API key configuration")
         return
 
-    # Avatar configurations - using known working avatar IDs
-    available_avatars = get_available_avatars()
-    
-    # Default avatars (known working ones)
-    default_avatars = {
-        "Monica (Default)": {"id": "monica-realistic", "description": "Default streaming avatar"},
-        "Josh": {"id": "josh-lite3-20230714", "description": "Male avatar"},
-        "Anna": {"id": "anna-realistic", "description": "Female avatar"},
+    # Custom avatar configurations for your specific characters
+    avatar_options = {
+        "Noa Martinez (June_HR)": {
+            "id": "June_HR_public", 
+            "description": "Virtual Clinical Instructor",
+            "voice_id": "c67d6fca1c3d4f55b81fcf9abc37d77f"
+        },
+        "Sam Richards (Shawn_Therapist)": {
+            "id": "Shawn_Therapist_public", 
+            "description": "Operations Manager, County Corrections Facility",
+            "voice_id": "0f6610678bfa4a1eb827d128662dca11"
+        }
     }
     
-    # Merge available avatars with defaults
-    avatar_options = {}
+    # Get available avatars for reference (optional)
+    available_avatars = get_available_avatars()
+    if available_avatars:
+        st.info(f"Note: Found {len(available_avatars)} additional avatars in your account")
+    
+    # Add any additional avatars from your account (keeping your custom ones as primary)
     if available_avatars:
         for avatar in available_avatars:
             name = avatar.get('name', 'Unknown')
-            avatar_options[name] = {
-                "id": avatar.get('avatar_id'),
-                "description": avatar.get('description', 'Custom avatar')
-            }
-    
-    # Add defaults if not already present
-    for name, config in default_avatars.items():
-        if name not in avatar_options:
-            avatar_options[name] = config
+            if name not in [key.split(' (')[0] for key in avatar_options.keys()]:
+                avatar_options[f"{name} (Available)"] = {
+                    "id": avatar.get('avatar_id'),
+                    "description": avatar.get('description', 'Additional avatar'),
+                    "voice_id": "default"  # Use default voice for additional avatars
+                }
     
     # Create tabs for different scenarios
     tab1, tab2 = st.tabs(["👋 Pre-briefing with Noa Martinez", "🏥 Simulation: Meeting with Sam Richards"])
@@ -510,38 +514,45 @@ def main():
         st.header("Pre-briefing with Noa Martinez")
         st.markdown("**Noa Martinez - Virtual Clinical Instructor**")
         
-        # Voice configuration options
-        voice_options = {
-            "Friendly": {"voice_id": "default", "rate": 1.0, "emotion": "friendly"},
-            "Professional": {"voice_id": "default", "rate": 0.9, "emotion": "serious"},
-            "Enthusiastic": {"voice_id": "default", "rate": 1.1, "emotion": "excited"},
-            "Calm": {"voice_id": "default", "rate": 0.8, "emotion": "soothing"},
+        # Voice configuration options for Noa
+        noa_voice_options = {
+            "Friendly": {"rate": 1.0, "emotion": "friendly"},
+            "Professional": {"rate": 0.9, "emotion": "serious"},
+            "Enthusiastic": {"rate": 1.1, "emotion": "excited"},
+            "Calm": {"rate": 0.8, "emotion": "soothing"},
         }
         
         col1, col2 = st.columns(2)
         with col1:
+            # Filter to show only Noa's avatar
+            noa_avatars = {k: v for k, v in avatar_options.items() if "Noa Martinez" in k}
+            if not noa_avatars:
+                # Fallback if the specific avatar isn't found
+                noa_avatars = {"Noa Martinez (June_HR)": avatar_options.get("Noa Martinez (June_HR)", {"id": "June_HR_public", "voice_id": "c67d6fca1c3d4f55b81fcf9abc37d77f"})}
+            
             selected_avatar = st.selectbox(
                 "Choose Avatar for Noa:",
-                options=list(avatar_options.keys()),
+                options=list(noa_avatars.keys()),
                 key="noa_avatar"
             )
         with col2:
             selected_voice = st.selectbox(
                 "Voice Style:",
-                options=list(voice_options.keys()),
+                options=list(noa_voice_options.keys()),
                 key="noa_voice"
             )
         
-        if selected_avatar and selected_avatar in avatar_options:
-            avatar_config = avatar_options[selected_avatar]
-            voice_config = voice_options[selected_voice]
+        if selected_avatar and selected_avatar in noa_avatars:
+            avatar_config = noa_avatars[selected_avatar]
+            voice_config = noa_voice_options[selected_voice]
             
-            # Create HeyGen component
+            # Create HeyGen component for Noa with her specific voice ID
             noa_component = create_heygen_component(
                 access_token=access_token,
                 avatar_id=avatar_config["id"],
                 session_id="noa_session",
                 avatar_name="Noa Martinez",
+                voice_id=avatar_config.get("voice_id", "c67d6fca1c3d4f55b81fcf9abc37d77f"),
                 voice_config=voice_config
             )
             
@@ -572,32 +583,46 @@ def main():
         st.header("Simulation: Meeting with Sam Richards")
         st.markdown("**Sam Richards - Operations Manager, County Corrections Facility**")
         
+        # Voice configuration options for Sam
+        sam_voice_options = {
+            "Professional": {"rate": 0.9, "emotion": "serious"},
+            "Authoritative": {"rate": 0.85, "emotion": "serious"},
+            "Friendly": {"rate": 1.0, "emotion": "friendly"},
+            "Skeptical": {"rate": 0.8, "emotion": "serious"},
+        }
+        
         col1, col2 = st.columns(2)
         with col1:
+            # Filter to show only Sam's avatar
+            sam_avatars = {k: v for k, v in avatar_options.items() if "Sam Richards" in k}
+            if not sam_avatars:
+                # Fallback if the specific avatar isn't found
+                sam_avatars = {"Sam Richards (Shawn_Therapist)": avatar_options.get("Sam Richards (Shawn_Therapist)", {"id": "Shawn_Therapist_public", "voice_id": "0f6610678bfa4a1eb827d128662dca11"})}
+            
             selected_avatar_sam = st.selectbox(
                 "Choose Avatar for Sam:",
-                options=list(avatar_options.keys()),
-                key="sam_avatar",
-                index=1 if len(avatar_options) > 1 else 0
+                options=list(sam_avatars.keys()),
+                key="sam_avatar"
             )
         with col2:
             selected_voice_sam = st.selectbox(
                 "Voice Style:",
-                options=list(voice_options.keys()),
+                options=list(sam_voice_options.keys()),
                 key="sam_voice",
-                index=1  # Default to Professional for Sam
+                index=0  # Default to Professional for Sam
             )
         
-        if selected_avatar_sam and selected_avatar_sam in avatar_options:
-            avatar_config_sam = avatar_options[selected_avatar_sam]
-            voice_config_sam = voice_options[selected_voice_sam]
+        if selected_avatar_sam and selected_avatar_sam in sam_avatars:
+            avatar_config_sam = sam_avatars[selected_avatar_sam]
+            voice_config_sam = sam_voice_options[selected_voice_sam]
             
-            # Create HeyGen component for Sam
+            # Create HeyGen component for Sam with his specific voice ID
             sam_component = create_heygen_component(
                 access_token=access_token,
                 avatar_id=avatar_config_sam["id"],
                 session_id="sam_session",
                 avatar_name="Sam Richards",
+                voice_id=avatar_config_sam.get("voice_id", "0f6610678bfa4a1eb827d128662dca11"),
                 voice_config=voice_config_sam
             )
             
