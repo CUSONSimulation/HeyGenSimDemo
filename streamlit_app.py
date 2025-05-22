@@ -254,7 +254,7 @@ def create_heygen_component(access_token, avatar_id, session_id, avatar_name, vo
                 logEntry.innerHTML = `<span class="log-timestamp">${{timestamp}}</span>${{message}}`;
                 logArea.appendChild(logEntry);
                 logArea.scrollTop = logArea.scrollHeight;
-                console.log(`[${{type.upper()}}] ${{message}}`);
+                console.log(`[${{type.toUpperCase()}}] ${{message}}`);
             }}
             
             function updateStatus(message, type = 'loading') {{
