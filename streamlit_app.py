@@ -1,723 +1,657 @@
 import streamlit as st
 import requests
+import os
 import json
-import time
-import re
-import streamlit.components.v1 as components
-from typing import Dict, List, Optional, Union
 
-# Set page configuration
+# Set page config
 st.set_page_config(
-    page_title="Clinical Simulation with Virtual Avatars",
-    page_icon="🏥",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    page_title="HeyGen Simulation Demo", 
+    page_icon="🎭",
+    layout="wide"
 )
 
-# Define constants
-HEYGEN_API_URL = "https://api.heygen.com"
+# Environment setup
+HEYGEN_API_KEY = st.secrets.get("HEYGEN_API_KEY") or os.getenv("HEYGEN_API_KEY")
 
-# Simulation stages
-STAGE_INTRO = "intro"
-STAGE_PREBRIEF = "prebrief"
-STAGE_SIMULATION = "simulation"
-STAGE_DEBRIEF = "debrief"
-STAGE_END = "end"
-
-# Character definitions
-CHARACTER_NOA = "noa"
-CHARACTER_SAM = "sam"
-
-# Default avatar and voice IDs
-AVATAR_CONFIG = {
-    CHARACTER_NOA: {
-        "avatar_id": "June_HR_public",
-        "voice_id": "c67d6fca1c3d4f55b81fcf9abc37d77f",
-        "name": "Noa Martinez",
-        "role": "Virtual Clinical Instructor"
-    },
-    CHARACTER_SAM: {
-        "avatar_id": "Shawn_Therapist_public",
-        "voice_id": "0f6610678bfa4a1eb827d128662dca11",
-        "name": "Sam Richards",
-        "role": "Operations Manager, County Corrections Facility"
-    }
-}
-
-# Initialize session state variables if they don't exist
-if "api_key" not in st.session_state:
-    st.session_state.api_key = None
-if "stage" not in st.session_state:
-    st.session_state.stage = STAGE_INTRO
-if "access_token" not in st.session_state:
-    st.session_state.access_token = None
-if "active_character" not in st.session_state:
-    st.session_state.active_character = CHARACTER_NOA
-if "conversation_history" not in st.session_state:
-    st.session_state.conversation_history = []
-if "simulation_responses" not in st.session_state:
-    st.session_state.simulation_responses = 0
-if "simulation_progress" not in st.session_state:
-    st.session_state.simulation_progress = 0
-
-# Helper functions for API interactions
-def get_access_token(api_key: str) -> Union[str, None]:
-    """Get access token from HeyGen API."""
+def get_access_token():
+    """Generate HeyGen access token from API key"""
+    if not HEYGEN_API_KEY:
+        st.error("⚠️ HeyGen API Key not found. Please add it to your Streamlit secrets.")
+        st.stop()
+    
     try:
         response = requests.post(
-            f"{HEYGEN_API_URL}/v1/streaming.create_token",
-            headers={"X-Api-Key": api_key}
+            "https://api.heygen.com/v1/streaming.create_token",
+            headers={"x-api-key": HEYGEN_API_KEY},
+            timeout=10
         )
-        data = response.json()
-        if response.status_code == 200 and "data" in data and "token" in data["data"]:
-            return data["data"]["token"]
+        
+        if response.status_code == 200:
+            return response.json().get("data", {}).get("token")
         else:
-            st.error(f"Failed to get access token: {data.get('error', 'Unknown error')}")
+            st.error(f"Failed to get access token: {response.status_code}")
+            st.write(f"Response: {response.text}")
             return None
+            
     except Exception as e:
         st.error(f"Error getting access token: {str(e)}")
         return None
 
-# Load character script responses
-def load_sam_responses():
-    """Load the character responses for Sam."""
-    # These are simplified response sets based on the script provided
-    return {
-        "opening": [
-            "Yeah, I got the memo about this meeting. Listen, we're already stretched thin here. Another program from county health? We just got through that mental health screening thing last year and that was a nightmare for our scheduling.",
-            "Alright, let's get this over with. I've got a facility to run, and this 'vaccine program' is just another headache. What exactly are you asking us to do?",
-            "Look, I don't have a lot of time, so let's get to it. You want to talk about this flu shot program, right? I'm not sure why we even need it. Our facility has been running just fine without it."
-        ],
-        "security": [
-            "Do you have any idea what it takes to move inmates around this facility? Every time we transport someone, that's a security risk. Now you want us to coordinate moving hundreds of inmates for shots? Who's going to handle that security? Not your people, that's for sure.",
-            "Security is my top priority. Every movement in this facility is a potential incident. Your team coming in here with medical equipment, syringes... that's a security risk I'm not sure we can manage with our current staffing."
-        ],
-        "staffing": [
-            "We're already short-staffed. Three officers called in sick just today. Who's going to supervise all this? We can't spare the manpower to watch over your health team while they give shots.",
-            "Hold on. You think we have the staff for this? My officers are already stretched thin with lockdowns and inmate movements. Where's the extra manpower coming from? And don't say 'reprioritize'—we're at capacity."
-        ],
-        "space": [
-            "Where exactly do you think this is going to happen? Our medical area has two exam rooms. TWO. And they're booked solid with urgent care issues. We don't have space for a vaccination clinic.",
-            "Phased? So we disrupt routines indefinitely? Inmates thrive on predictability. Even minor changes cause unrest. Last month, a shift in meal times led to a riot. Tell me, Nurse—how many correctional facilities have you managed?"
-        ],
-        "paperwork": [
-            "So who's handling all the paperwork for this? My staff isn't trained on medical documentation. And if something goes wrong with one of these vaccines, who's liable? Us or you? These questions matter in corrections.",
-            "Paperwork alone will bury us. Every shot needs consent forms, logs, incident reports. Our admin team is drowning in OSHA audits. Who's handling the extra load? You?"
-        ],
-        "budget": [
-            "Nobody told me about any budget for this. Who's paying for the extra officer hours? The cleanup? The extra administrative work? Our budget was finalized months ago.",
-            "Money's always tight, but I don't see how spending more upfront saves us anything. Besides, sick inmates just stay in their cells—problem solved."
-        ],
-        "resistance": [
-            "You know most of these inmates don't want these vaccines, right? We'll have refusals left and right. Some of them think the government is trying to experiment on them. Then what? Force them? That's a lawsuit waiting to happen.",
-            "Education? These aren't kindergarteners. Inmates don't trust us, and they'll think this is some experiment. And if you offer 'incentives' like extra rec time, the gangs will exploit it. Security risks skyrocket—you ready to take responsibility for that?"
-        ],
-        "schedule": [
-            "Our facility runs on a tight schedule. Meals, yard time, visits, work duties - it's all carefully coordinated. Your vaccination program throws all that into chaos.",
-            "Staggered schedules? You ever tried coordinating 500 inmates during flu season? They'll refuse just to cause delays. Last time we rolled out TB testing, half the block staged a hunger strike. What's your plan for that?"
-        ],
-        "past_failures": [
-            "Last year, county mental health came in with their new screening program. Took twice as long as they said it would. Left us with a backlog of intake processing that took months to clear. Why would this be any different?",
-            "Look, they're incarcerated for a reason. They gave up certain luxuries. Nobody said jail was supposed to be comfortable. Flu shots sound like a privilege, not a necessity."
-        ],
-        "evidence": [
-            "That might work in theory or in some other facility, but you don't understand how things work HERE. Our situation is different.",
-            "Data? Every facility's different. Our population has more comorbidities. What if vaccines cause adverse reactions here? Our infirmary can't handle a surge. Did your 'data' account for that?"
-        ],
-        "alternatives": [
-            "Look, if you want my honest opinion, just leave the vaccines with our medical staff and let them give them during regular sick call. No special program needed. That's how we've always handled it.",
-            "A trial? You mean a foot in the door for you to roll this thing out full-scale later? I've seen this play before. First, it's optional, then it's 'strongly recommended,' and before you know it, we're forced to do it."
-        ],
-        "closing": [
-            "I'll have to take this up with the warden. Don't expect a quick decision. We've got real security issues to deal with around here. I'll be in touch... eventually.",
-            "I just don't see how this works without creating a mess for us. Maybe someone higher up will force it through, but I wouldn't count on me making this easy for you. If you want to keep pushing, take it up with my boss."
-        ],
-        "fallback": [
-            "Look, that sounds nice on paper, but in reality, it's never that simple in a corrections facility.",
-            "I've been doing this for 14 years. Trust me, these kinds of programs always end up causing more problems than they solve.",
-            "We've heard all this before from other programs. Always big promises, never enough support.",
-            "That's not how things work around here. We have protocols and security concerns that come first.",
-            "I'm not convinced this is worth the disruption it's going to cause to our operations."
-        ]
-    }
+def get_available_avatars():
+    """Get list of available avatars"""
+    if not HEYGEN_API_KEY:
+        return []
+    
+    try:
+        response = requests.get(
+            "https://api.heygen.com/v2/avatars",
+            headers={"x-api-key": HEYGEN_API_KEY},
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            avatars_data = response.json().get("data", {}).get("avatars", [])
+            # Filter for streaming-compatible avatars
+            streaming_avatars = [
+                avatar for avatar in avatars_data 
+                if avatar.get("avatar_type") == "streaming" or 
+                   avatar.get("name", "").lower() in ["monica", "josh", "anna", "wayne"]
+            ]
+            return streaming_avatars
+        else:
+            st.warning(f"Could not fetch avatars: {response.status_code}")
+            return []
+    except Exception as e:
+        st.warning(f"Error fetching avatars: {str(e)}")
+        return []
 
-def get_sam_response(context: str) -> str:
-    """Get an appropriate response from Sam based on the context."""
-    responses = load_sam_responses()
+def create_heygen_component(access_token, avatar_id, session_id, avatar_name, voice_config=None):
+    """Create HeyGen streaming avatar component using REST API approach with enhanced configuration"""
     
-    # Map keywords to response categories
-    keywords = {
-        r'\b(hi|hello|introduce|introduction|start)\b': "opening",
-        r'\b(secur|safe|guard|risk|danger)\b': "security",
-        r'\b(staff|officer|personnel|manpower|short-staffed)\b': "staffing",
-        r'\b(space|room|area|facility|place)\b': "space",
-        r'\b(document|paperwork|form|liability|responsible)\b': "paperwork",
-        r'\b(budget|cost|fund|money|expense|pay)\b': "budget",
-        r'\b(inmate|refus|consent|resist|willing|voluntary)\b': "resistance",
-        r'\b(schedule|time|disrupt|routine|coordination)\b': "schedule",
-        r'\b(previous|before|last|history|past|failed)\b': "past_failures",
-        r'\b(evidence|data|research|study|statistic|show|prove)\b': "evidence",
-        r'\b(alternative|option|suggestion|recommend|instead)\b': "alternatives",
-        r'\b(end|finish|conclude|next step|follow|warden)\b': "closing",
-    }
+    # Default voice configuration based on SDK patterns
+    if voice_config is None:
+        voice_config = {
+            "voice_id": "default",
+            "rate": 1.0,
+            "emotion": "friendly"
+        }
     
-    # Find matching category based on keywords
-    category = None
-    for pattern, cat in keywords.items():
-        if re.search(pattern, context.lower()):
-            category = cat
-            break
-    
-    # If no category matched, use the fallback
-    if category is None or category not in responses:
-        category = "fallback"
-    
-    # Get a response from the category
-    response_list = responses[category]
-    response_index = st.session_state.simulation_responses % len(response_list)
-    st.session_state.simulation_responses += 1
-    
-    return response_list[response_index]
-
-def add_to_conversation(character: str, text: str):
-    """Add a message to the conversation history."""
-    st.session_state.conversation_history.append({
-        "character": character,
-        "text": text,
-        "timestamp": time.time()
-    })
-
-def display_conversation_history():
-    """Display the conversation history."""
-    if st.session_state.conversation_history:
-        st.markdown("### Conversation History")
-        for entry in st.session_state.conversation_history:
-            if entry["character"] == CHARACTER_NOA:
-                st.markdown(f"**Noa**: {entry['text']}")
-            elif entry["character"] == CHARACTER_SAM:
-                st.markdown(f"**Sam**: {entry['text']}")
-            else:  # Student
-                st.markdown(f"**You**: {entry['text']}")
-
-# HeyGen Avatar Component using JavaScript SDK
-def heygen_avatar_component(access_token, avatar_id, voice_id, height=500, character="noa"):
-    """Create a HeyGen Avatar component using the JavaScript SDK."""
-    
-    # Create a unique div id for this avatar instance
-    div_id = f"avatar-container-{character}"
-    
-    # JavaScript for initializing the avatar - Fixed version with more debugging
+    # This creates a pure HTML/JS implementation that uses the HeyGen REST API
+    # with enhanced session management based on the full SDK understanding
     component_html = f"""
     <!DOCTYPE html>
     <html>
     <head>
         <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>HeyGen Avatar</title>
         <style>
-            #container {{
-                width: 100%;
-                height: {height}px;
-                background-color: #000;
-                position: relative;
-                border-radius: 8px;
-                overflow: hidden;
-            }}
-            #status {{
-                position: absolute;
-                bottom: 10px;
-                left: 10px;
-                background-color: rgba(0, 0, 0, 0.6);
+            body {{
+                margin: 0;
+                padding: 20px;
+                background: #1a1a1a;
                 color: white;
-                padding: 5px 10px;
-                border-radius: 4px;
-                font-size: 12px;
-                font-family: sans-serif;
+                font-family: -apple-system, BlinkMacSystemFont, sans-serif;
             }}
-            #error {{
-                color: red;
-                margin: 10px;
-                font-family: sans-serif;
+            
+            .container {{
+                max-width: 800px;
+                margin: 0 auto;
+            }}
+            
+            .avatar-section {{
+                background: #2d2d2d;
+                border-radius: 12px;
+                padding: 20px;
+                margin-bottom: 20px;
+            }}
+            
+            .avatar-video {{
+                width: 100%;
+                height: 400px;
+                background: black;
+                border-radius: 8px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                margin-bottom: 15px;
+                position: relative;
+            }}
+            
+            .video-element {{
+                width: 100%;
+                height: 100%;
+                object-fit: cover;
+                border-radius: 8px;
+            }}
+            
+            .status {{
+                text-align: center;
+                padding: 10px;
+                border-radius: 6px;
+                margin-bottom: 15px;
+                font-weight: 500;
+            }}
+            
+            .status.loading {{ background: #1f4e79; color: #87ceeb; }}
+            .status.success {{ background: #1f4e3b; color: #90ee90; }}
+            .status.error {{ background: #4e1f1f; color: #ffcccb; }}
+            
+            .controls {{
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+                gap: 10px;
+                margin-bottom: 20px;
+            }}
+            
+            button {{
+                background: #0066cc;
+                color: white;
+                border: none;
+                padding: 12px 16px;
+                border-radius: 6px;
+                cursor: pointer;
+                font-weight: 500;
+                transition: all 0.2s;
+            }}
+            
+            button:hover {{
+                background: #0052a3;
+                transform: translateY(-1px);
+            }}
+            
+            button:disabled {{
+                background: #555;
+                cursor: not-allowed;
+                transform: none;
+            }}
+            
+            .chat-input {{
+                display: flex;
+                gap: 10px;
+                margin-bottom: 15px;
+            }}
+            
+            input[type="text"] {{
+                flex: 1;
+                padding: 12px;
+                border: 1px solid #555;
+                border-radius: 6px;
+                background: #333;
+                color: white;
+            }}
+            
+            .log {{
+                background: #1a1a1a;
+                border: 1px solid #333;
+                border-radius: 6px;
+                padding: 15px;
+                height: 150px;
+                overflow-y: auto;
+                font-family: 'Monaco', 'Menlo', monospace;
+                font-size: 12px;
+                line-height: 1.4;
+            }}
+            
+            .log-entry {{
+                margin-bottom: 5px;
+                padding: 2px 0;
+            }}
+            
+            .log-timestamp {{
+                color: #888;
+                margin-right: 8px;
             }}
         </style>
     </head>
     <body>
-        <div id="container">
-            <div id="status">Loading SDK...</div>
+        <div class="container">
+            <div class="avatar-section">
+                <h3>{avatar_name} - Interactive Session</h3>
+                
+                <div class="avatar-video" id="avatarVideo">
+                    <video id="videoElement" class="video-element" autoplay muted style="display: none;"></video>
+                    <div id="placeholderText" style="color: #666; font-size: 18px;">
+                        Setting up {avatar_name}...
+                    </div>
+                </div>
+                
+                <div id="status" class="status loading">Initializing session...</div>
+                
+                <div class="controls">
+                    <button id="startBtn" onclick="startSession()">Start Session</button>
+                    <button id="speakBtn" onclick="speakText()" disabled>Speak Test</button>
+                    <button id="stopBtn" onclick="stopSession()" disabled>Stop Session</button>
+                </div>
+                
+                <div class="chat-input">
+                    <input type="text" id="chatInput" placeholder="Enter message for avatar to speak..." 
+                           disabled onkeypress="handleKeyPress(event)">
+                    <button onclick="speakCustomText()" disabled id="sendBtn">Send</button>
+                </div>
+                
+                <div class="log" id="logArea"></div>
+            </div>
         </div>
-        <div id="error"></div>
-        
+
         <script>
-            const errorDiv = document.getElementById('error');
-            const statusDiv = document.getElementById('status');
+            // Session state
+            let sessionData = null;
+            let isConnected = false;
             
-            // Debug info
-            console.log("Starting initialization for {character} avatar");
-            statusDiv.innerText = "Loading SDK...";
+            // DOM elements
+            const statusEl = document.getElementById('status');
+            const startBtn = document.getElementById('startBtn');
+            const speakBtn = document.getElementById('speakBtn');
+            const stopBtn = document.getElementById('stopBtn');
+            const chatInput = document.getElementById('chatInput');
+            const sendBtn = document.getElementById('sendBtn');
+            const logArea = document.getElementById('logArea');
+            const videoElement = document.getElementById('videoElement');
+            const placeholderText = document.getElementById('placeholderText');
             
-            // First, load the SDK from CDN
-            function loadScript(url) {{
-                return new Promise((resolve, reject) => {{
-                    const script = document.createElement('script');
-                    script.src = url;
-                    script.async = true;
-                    script.onload = resolve;
-                    script.onerror = reject;
-                    document.body.appendChild(script);
-                }});
+            function log(message, type = 'info') {{
+                const timestamp = new Date().toLocaleTimeString();
+                const logEntry = document.createElement('div');
+                logEntry.className = 'log-entry';
+                logEntry.innerHTML = `<span class="log-timestamp">${{timestamp}}</span>${{message}}`;
+                logArea.appendChild(logEntry);
+                logArea.scrollTop = logArea.scrollHeight;
+                console.log(`[${{type.upper()}}] ${{message}}`);
             }}
             
-            // Initialize the avatar
-            async function initializeAvatar() {{
+            function updateStatus(message, type = 'loading') {{
+                statusEl.textContent = message;
+                statusEl.className = `status ${{type}}`;
+                log(message);
+            }}
+            
+            async function startSession() {{
                 try {{
-                    await loadScript('https://cdn.jsdelivr.net/npm/@heygen/streaming-avatar@2.0.14/dist/index.umd.js');
-                    statusDiv.innerText = "SDK loaded, initializing avatar...";
-                    console.log("SDK loaded for {character}");
+                    updateStatus('Creating avatar session...', 'loading');
+                    startBtn.disabled = true;
                     
-                    // Verify SDK is loaded
-                    if (typeof StreamingAvatar === 'undefined') {{
-                        throw new Error("StreamingAvatar is not defined after loading script");
+                    // Create new session
+                    const response = await fetch('https://api.heygen.com/v1/streaming.new', {{
+                        method: 'POST',
+                        headers: {{
+                            'Authorization': 'Bearer {access_token}',
+                            'Content-Type': 'application/json'
+                        }},
+                        body: JSON.stringify({{
+                            avatar_name: '{avatar_id}',
+                            quality: 'low',
+                            voice: {{
+                                voice_id: '{voice_config.get("voice_id", "default")}',
+                                rate: {voice_config.get("rate", 1.0)},
+                                emotion: '{voice_config.get("emotion", "friendly")}'
+                            }},
+                            version: 'v2',
+                            video_encoding: 'H264',
+                            source: 'streamlit-integration',
+                            stt_settings: {{
+                                provider: 'deepgram',
+                                confidence: 0.6
+                            }}
+                        }})
+                    }});
+                    
+                    if (!response.ok) {{
+                        throw new Error(`Session creation failed: ${{response.status}}`);
                     }}
                     
-                    // Create the streaming avatar instance
-                    const avatar = new StreamingAvatar({{
-                        token: "{access_token}"
+                    const data = await response.json();
+                    sessionData = data.data;
+                    
+                    log(`Session created: ${{sessionData.session_id}}`);
+                    
+                    // Start the session
+                    const startResponse = await fetch('https://api.heygen.com/v1/streaming.start', {{
+                        method: 'POST',
+                        headers: {{
+                            'Authorization': 'Bearer {access_token}',
+                            'Content-Type': 'application/json'
+                        }},
+                        body: JSON.stringify({{
+                            session_id: sessionData.session_id
+                        }})
                     }});
                     
-                    window.avatar_{character} = avatar;
-                    console.log("Avatar instance created");
+                    if (!startResponse.ok) {{
+                        throw new Error(`Session start failed: ${{startResponse.status}}`);
+                    }}
                     
-                    // Set up event listeners
-                    avatar.on("STREAM_READY", (event) => {{
-                        console.log("Stream ready event:", event);
-                        statusDiv.innerText = "Connected";
-                    }});
+                    updateStatus('Session started successfully!', 'success');
+                    isConnected = true;
                     
-                    avatar.on("STREAM_DISCONNECTED", () => {{
-                        console.log("Stream disconnected");
-                        statusDiv.innerText = "Disconnected";
-                    }});
+                    // Enable controls
+                    speakBtn.disabled = false;
+                    stopBtn.disabled = false;
+                    chatInput.disabled = false;
+                    sendBtn.disabled = false;
                     
-                    avatar.on("AVATAR_START_TALKING", () => {{
-                        console.log("Avatar started talking");
-                        statusDiv.innerText = "Speaking...";
-                    }});
+                    // Hide placeholder, show video area
+                    placeholderText.style.display = 'none';
+                    videoElement.style.display = 'block';
                     
-                    avatar.on("AVATAR_STOP_TALKING", () => {{
-                        console.log("Avatar stopped talking");
-                        statusDiv.innerText = "Connected";
-                    }});
-                    
-                    // Create and start the avatar session
-                    statusDiv.innerText = "Creating avatar session...";
-                    console.log("Starting avatar creation with:", {{
-                        quality: "Medium",
-                        avatarName: "{avatar_id}",
-                        voice: {{ voiceId: "{voice_id}" }}
-                    }});
-                    
-                    const sessionInfo = await avatar.createStartAvatar({{
-                        quality: "Medium",
-                        avatarName: "{avatar_id}",
-                        voice: {{
-                            voiceId: "{voice_id}"
-                        }}
-                    }});
-                    
-                    console.log("Session created:", sessionInfo);
-                    statusDiv.innerText = "Avatar ready";
-                    
-                    // Create global function to speak
-                    window.speakText_{character} = function(text) {{
-                        console.log("Speaking:", text);
-                        avatar.speak({{ text: text, task_type: "REPEAT" }});
-                    }};
-                    
-                    // Try a test message
-                    setTimeout(() => {{
-                        console.log("Testing avatar with greeting");
-                        avatar.speak({{ text: "Hello", task_type: "REPEAT" }});
-                    }}, 3000);
+                    log('Avatar is ready for interaction');
                     
                 }} catch (error) {{
-                    console.error("Error initializing avatar:", error);
-                    errorDiv.innerText = "Error: " + error.message;
-                    statusDiv.innerText = "Initialization failed";
+                    updateStatus(`Error: ${{error.message}}`, 'error');
+                    startBtn.disabled = false;
+                    log(`Error: ${{error.message}}`, 'error');
                 }}
             }}
             
-            // Start initialization
-            initializeAvatar();
+            async function speakText(text = "Hello! I'm {avatar_name}, ready for our simulation today.") {{
+                if (!sessionData || !isConnected) {{
+                    updateStatus('Session not active', 'error');
+                    return;
+                }}
+                
+                try {{
+                    updateStatus('Avatar speaking...', 'loading');
+                    
+                    const response = await fetch('https://api.heygen.com/v1/streaming.task', {{
+                        method: 'POST',
+                        headers: {{
+                            'Authorization': 'Bearer {access_token}',
+                            'Content-Type': 'application/json'
+                        }},
+                        body: JSON.stringify({{
+                            session_id: sessionData.session_id,
+                            text: text,
+                            task_type: 'talk'
+                        }})
+                    }});
+                    
+                    if (!response.ok) {{
+                        throw new Error(`Speak request failed: ${{response.status}}`);
+                    }}
+                    
+                    const result = await response.json();
+                    log(`Speaking: "${{text}}"`);
+                    updateStatus('Avatar ready', 'success');
+                    
+                }} catch (error) {{
+                    updateStatus(`Speak error: ${{error.message}}`, 'error');
+                    log(`Speak error: ${{error.message}}`, 'error');
+                }}
+            }}
+            
+            async function speakCustomText() {{
+                const text = chatInput.value.trim();
+                if (!text) return;
+                
+                await speakText(text);
+                chatInput.value = '';
+            }}
+            
+            function handleKeyPress(event) {{
+                if (event.key === 'Enter') {{
+                    speakCustomText();
+                }}
+            }}
+            
+            async function stopSession() {{
+                if (!sessionData) return;
+                
+                try {{
+                    updateStatus('Stopping session...', 'loading');
+                    
+                    const response = await fetch('https://api.heygen.com/v1/streaming.stop', {{
+                        method: 'POST',
+                        headers: {{
+                            'Authorization': 'Bearer {access_token}',
+                            'Content-Type': 'application/json'
+                        }},
+                        body: JSON.stringify({{
+                            session_id: sessionData.session_id
+                        }})
+                    }});
+                    
+                    updateStatus('Session stopped', 'success');
+                    isConnected = false;
+                    sessionData = null;
+                    
+                    // Reset UI
+                    startBtn.disabled = false;
+                    speakBtn.disabled = true;
+                    stopBtn.disabled = true;
+                    chatInput.disabled = true;
+                    sendBtn.disabled = true;
+                    
+                    placeholderText.style.display = 'block';
+                    videoElement.style.display = 'none';
+                    placeholderText.textContent = 'Session ended. Click Start to begin again.';
+                    
+                }} catch (error) {{
+                    updateStatus(`Stop error: ${{error.message}}`, 'error');
+                    log(`Stop error: ${{error.message}}`, 'error');
+                }}
+            }}
+            
+            // Auto-start on load
+            setTimeout(() => {{
+                log('Component loaded, ready to start session');
+                updateStatus('Ready to start session', 'success');
+            }}, 500);
         </script>
     </body>
     </html>
     """
     
-    # Render the HTML component
-    components.html(component_html, height=height + 50)
-    
-    return True
+    return component_html
 
-# Define prebriefing text ahead of time so it's available in scope
-PREBRIEF_TEXT = """
-Hello, I'm Noa Martinez, your Virtual Clinical Instructor for today's simulation. 
-
-In this scenario, you'll be playing the role of a public health nurse meeting with Sam Richards, 
-an Operations Manager at a County Corrections Facility. Your goal is to discuss and negotiate 
-the implementation of a new flu vaccination program for incarcerated individuals.
-
-Sam has been in his position for 14 years and tends to be resistant to change. He's defensive 
-of current processes and often focuses on problems rather than solutions. His communication style 
-can be challenging - he may interrupt you, use dismissive language, and rely on "we've always 
-done it this way" reasoning.
-
-Your objectives are to:
-1. Build rapport despite resistance
-2. Address concerns constructively
-3. Use data effectively to support your case
-4. Navigate the power dynamics
-5. Apply change management principles
-
-Remember to maintain your professionalism even when faced with resistance. Take notes on Sam's 
-objections so we can discuss them in the debriefing.
-
-Are you ready to begin the simulation?
-"""
-
-TRANSITION_TEXT = """
-Great! Remember your objectives and stay focused on your goal of implementing the 
-flu vaccination program. I'll be observing and we'll discuss your interaction afterwards. 
-Good luck with Sam!
-"""
-
-DEBRIEF_TEXT = """
-Great job completing the simulation! Let's take some time to reflect on your interaction with Sam.
-
-I noticed that Sam presented several barriers to implementing the flu vaccination program. 
-Let's discuss how you addressed these objections and what strategies were effective.
-
-What aspects of the interaction did you find most challenging? What approaches worked well 
-for you in addressing Sam's resistance?
-"""
-
-# UI elements and workflow functions
-def display_intro_page():
-    """Display the introduction page."""
-    st.title("Clinical Simulation with Virtual Avatars")
-    
-    st.markdown("""
-    ## Welcome to the Virtual Simulation Environment
-    
-    This application simulates a clinical scenario where you (as a public health nurse) 
-    will interact with Sam Richards, an Operations Manager at a County Corrections Facility,
-    to discuss implementing a new flu vaccination program.
-    
-    Your virtual clinical instructor, Noa Martinez, will guide you through the process.
-    
-    ### Simulation Flow:
-    1. **Pre-briefing**: Noa will explain the scenario and your objectives
-    2. **Simulation**: You'll interact with Sam Richards to negotiate the implementation
-    3. **Debriefing**: Noa will help you reflect on the experience
-    
-    ### Getting Started
-    Please enter your HeyGen API key to begin the simulation.
-    """)
-    
-    # Try to load API key from secrets first
-    try:
-        api_key = st.secrets["heygen_api_key"]
-        st.session_state.api_key = api_key
-        st.success("API key loaded from Streamlit secrets")
-    except:
-        # If not available, show input field
-        api_key = st.text_input("HeyGen API Key", type="password", key="api_key_input")
-        st.session_state.api_key = api_key
-    
-    if st.button("Start Simulation"):
-        if st.session_state.api_key:
-            # Get access token
-            access_token = get_access_token(st.session_state.api_key)
-            if access_token:
-                st.session_state.access_token = access_token
-                st.session_state.stage = STAGE_PREBRIEF
-                st.rerun()
-            else:
-                st.error("Failed to get access token. Please check your API key.")
-        else:
-            st.warning("Please enter your HeyGen API key to proceed.")
-
-def display_prebrief_page():
-    """Display the pre-briefing page."""
-    st.title("Pre-briefing with Noa Martinez")
-    
-    # Create two columns - one for avatar and one for conversation
-    col1, col2 = st.columns([3, 2])
-    
-    with col1:
-        # Display the Noa avatar using the JavaScript SDK
-        if st.session_state.access_token:
-            heygen_avatar_component(
-                st.session_state.access_token,
-                AVATAR_CONFIG[CHARACTER_NOA]["avatar_id"],
-                AVATAR_CONFIG[CHARACTER_NOA]["voice_id"],
-                height=400,
-                character=CHARACTER_NOA
-            )
-    
-    with col2:
-        st.markdown(f"### {AVATAR_CONFIG[CHARACTER_NOA]['name']} - {AVATAR_CONFIG[CHARACTER_NOA]['role']}")
-        
-        # Pre-briefing script
-        if not st.session_state.conversation_history:
-            # Add to conversation history
-            add_to_conversation(CHARACTER_NOA, PREBRIEF_TEXT)
-    
-    # JavaScript to speak through the avatar
-    if st.session_state.conversation_history and len(st.session_state.conversation_history) == 1:
-        # Run JavaScript to make the avatar speak - using a simple approach without referring to an undefined variable
-        components.html(
-            """
-            <script>
-                function attemptToSpeak() {
-                    if (window.avatar_noa) {
-                        window.avatar_noa.speak({ 
-                            text: "Hello, I'm Noa Martinez, your Virtual Clinical Instructor for today's simulation.", 
-                            task_type: "REPEAT" 
-                        });
-                        return true;
-                    }
-                    return false;
-                }
-                
-                // Try multiple times in case the avatar isn't ready yet
-                let attempts = 0;
-                let maxAttempts = 10;
-                let success = false;
-                
-                function trySpeak() {
-                    if (attempts >= maxAttempts || success) return;
-                    
-                    success = attemptToSpeak();
-                    if (!success) {
-                        attempts++;
-                        setTimeout(trySpeak, 1000);
-                    }
-                }
-                
-                // Start trying after a delay
-                setTimeout(trySpeak, 3000);
-            </script>
-            """,
-            height=0
-        )
-    
-    # Display conversation history
-    display_conversation_history()
-    
-    # User input
-    user_message = st.text_input("Your response:", key="user_input_prebrief")
-    
-    if st.button("Send", key="send_prebrief"):
-        if user_message:
-            # Add user message to conversation
-            add_to_conversation("student", user_message)
-            
-            # Generate a response from Noa
-            noa_response = "I understand. Remember that your goal is to advocate for the implementation of the flu vaccination program while addressing Sam's concerns."
-            add_to_conversation(CHARACTER_NOA, noa_response)
-            
-            # Clear the input
-            st.session_state.user_input_prebrief = ""
-            
-            st.rerun()
-    
-    # Button to start simulation
-    if st.button("Start Simulation"):
-        # Final instruction before simulation
-        add_to_conversation(CHARACTER_NOA, TRANSITION_TEXT)
-        
-        # Switch to simulation stage
-        st.session_state.stage = STAGE_SIMULATION
-        st.rerun()
-
-def display_simulation_page():
-    """Display the simulation page."""
-    st.title("Simulation: Meeting with Sam Richards")
-    
-    # Create two columns - one for avatar and one for conversation
-    col1, col2 = st.columns([3, 2])
-    
-    with col1:
-        # Display the Sam avatar using the JavaScript SDK
-        if st.session_state.access_token:
-            heygen_avatar_component(
-                st.session_state.access_token,
-                AVATAR_CONFIG[CHARACTER_SAM]["avatar_id"],
-                AVATAR_CONFIG[CHARACTER_SAM]["voice_id"],
-                height=400,
-                character=CHARACTER_SAM
-            )
-    
-    with col2:
-        st.markdown(f"### {AVATAR_CONFIG[CHARACTER_SAM]['name']} - {AVATAR_CONFIG[CHARACTER_SAM]['role']}")
-        
-        # Initial greeting from Sam if this is the start of the simulation
-        if not any(entry["character"] == CHARACTER_SAM for entry in st.session_state.conversation_history):
-            opening_lines = load_sam_responses()["opening"]
-            opening_line = opening_lines[0]  # Use the first opening line
-            add_to_conversation(CHARACTER_SAM, opening_line)
-    
-    # Display conversation history
-    display_conversation_history()
-    
-    # User input
-    user_message = st.text_input("Your response:", key="user_input_simulation")
-    
-    if st.button("Send", key="send_simulation"):
-        if user_message:
-            # Add user message to conversation
-            add_to_conversation("student", user_message)
-            
-            # Get Sam's response based on the context
-            sam_response = get_sam_response(user_message)
-            add_to_conversation(CHARACTER_SAM, sam_response)
-            
-            # Progress the simulation
-            st.session_state.simulation_progress += 1
-            
-            # Clear the input
-            st.session_state.user_input_simulation = ""
-            
-            # After 5 exchanges, move to debrief
-            if st.session_state.simulation_progress >= 5:
-                # One final response from Sam before ending
-                closing_response = "I'll have to take this up with the warden. Don't expect a quick decision. We've got real security issues to deal with around here. I'll be in touch... eventually."
-                add_to_conversation(CHARACTER_SAM, closing_response)
-                
-                # Switch back to Noa for debriefing
-                st.session_state.stage = STAGE_DEBRIEF
-            
-            st.rerun()
-    
-    # Allow manually ending the simulation
-    if st.button("End Simulation"):
-        st.session_state.stage = STAGE_DEBRIEF
-        st.rerun()
-
-def display_debrief_page():
-    """Display the debriefing page."""
-    st.title("Debriefing with Noa Martinez")
-    
-    # Create two columns - one for avatar and one for conversation
-    col1, col2 = st.columns([3, 2])
-    
-    with col1:
-        # Display the Noa avatar using the JavaScript SDK
-        if st.session_state.access_token:
-            heygen_avatar_component(
-                st.session_state.access_token,
-                AVATAR_CONFIG[CHARACTER_NOA]["avatar_id"],
-                AVATAR_CONFIG[CHARACTER_NOA]["voice_id"],
-                height=400,
-                character=CHARACTER_NOA
-            )
-    
-    with col2:
-        st.markdown(f"### {AVATAR_CONFIG[CHARACTER_NOA]['name']} - {AVATAR_CONFIG[CHARACTER_NOA]['role']}")
-        
-        # Initial debrief from Noa if this is the start of the debriefing
-        if not any(entry["character"] == CHARACTER_NOA and "Great job" in entry["text"] for entry in st.session_state.conversation_history):
-            add_to_conversation(CHARACTER_NOA, DEBRIEF_TEXT)
-    
-    # Display conversation history
-    display_conversation_history()
-    
-    # User input
-    user_message = st.text_input("Your response:", key="user_input_debrief")
-    
-    if st.button("Send", key="send_debrief"):
-        if user_message:
-            # Add user message to conversation
-            add_to_conversation("student", user_message)
-            
-            # Generate a response from Noa
-            noa_response = "Thank you for sharing your reflections. It's important to analyze these interactions to grow as a healthcare professional. What other insights did you gain from this experience?"
-            add_to_conversation(CHARACTER_NOA, noa_response)
-            
-            # Clear the input
-            st.session_state.user_input_debrief = ""
-            
-            st.rerun()
-    
-    # Button to end session
-    if st.button("Complete Simulation"):
-        st.session_state.stage = STAGE_END
-        st.rerun()
-
-def display_end_page():
-    """Display the end page."""
-    st.title("Simulation Complete")
-    
-    st.markdown("""
-    ## Thank you for completing the simulation!
-    
-    We hope this experience has helped you develop skills in:
-    
-    - Communicating with resistant stakeholders
-    - Applying change management principles
-    - Advocating for public health initiatives
-    - Navigating organizational dynamics
-    
-    Your conversation history has been recorded for your reference.
-    """)
-    
-    # Display conversation history
-    display_conversation_history()
-    
-    # Button to restart
-    if st.button("Start New Simulation"):
-        # Reset session state
-        for key in list(st.session_state.keys()):
-            if key != "api_key" and key != "access_token":
-                del st.session_state[key]
-        
-        # Initialize new session
-        st.session_state.stage = STAGE_INTRO
-        st.session_state.conversation_history = []
-        st.session_state.simulation_responses = 0
-        st.session_state.simulation_progress = 0
-        
-        st.rerun()
-
-# Main application flow
 def main():
-    # Try to load API key from secrets
-    if not st.session_state.api_key:
-        try:
-            st.session_state.api_key = st.secrets["heygen_api_key"]
-        except:
-            # Will use the input field instead
-            pass
+    st.title("🎭 HeyGen Simulation Demo - Fixed Implementation")
     
-    # Try to get access token if we have API key but no token
-    if st.session_state.api_key and not st.session_state.access_token:
-        st.session_state.access_token = get_access_token(st.session_state.api_key)
+    # Debug section
+    with st.expander("🔧 Debug Information", expanded=False):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("Test API Connection"):
+                if HEYGEN_API_KEY:
+                    st.success("✅ API Key found")
+                    token = get_access_token()
+                    if token:
+                        st.success("✅ Access token generated")
+                        st.code(f"Token: {token[:20]}...", language="text")
+                    else:
+                        st.error("❌ Failed to generate access token")
+                else:
+                    st.error("❌ No API Key found")
+        
+        with col2:
+            if st.button("Fetch Available Avatars"):
+                avatars = get_available_avatars()
+                if avatars:
+                    st.success(f"✅ Found {len(avatars)} avatars")
+                    for avatar in avatars[:5]:  # Show first 5
+                        st.write(f"• {avatar.get('name', 'Unknown')} (ID: {avatar.get('avatar_id', 'N/A')})")
+                else:
+                    st.warning("No avatars found")
+
+    # Get access token
+    access_token = get_access_token()
+    if not access_token:
+        st.error("Cannot proceed without access token")
+        st.info("Please check your HeyGen API key configuration")
+        return
+
+    # Avatar configurations - using known working avatar IDs
+    available_avatars = get_available_avatars()
     
-    # Display appropriate page based on current stage
-    if st.session_state.stage == STAGE_INTRO:
-        display_intro_page()
-    elif st.session_state.stage == STAGE_PREBRIEF:
-        display_prebrief_page()
-    elif st.session_state.stage == STAGE_SIMULATION:
-        display_simulation_page()
-    elif st.session_state.stage == STAGE_DEBRIEF:
-        display_debrief_page()
-    elif st.session_state.stage == STAGE_END:
-        display_end_page()
-    else:
-        st.error("Unknown stage. Resetting to intro.")
-        st.session_state.stage = STAGE_INTRO
-        st.rerun()
+    # Default avatars (known working ones)
+    default_avatars = {
+        "Monica (Default)": {"id": "monica-realistic", "description": "Default streaming avatar"},
+        "Josh": {"id": "josh-lite3-20230714", "description": "Male avatar"},
+        "Anna": {"id": "anna-realistic", "description": "Female avatar"},
+    }
+    
+    # Merge available avatars with defaults
+    avatar_options = {}
+    if available_avatars:
+        for avatar in available_avatars:
+            name = avatar.get('name', 'Unknown')
+            avatar_options[name] = {
+                "id": avatar.get('avatar_id'),
+                "description": avatar.get('description', 'Custom avatar')
+            }
+    
+    # Add defaults if not already present
+    for name, config in default_avatars.items():
+        if name not in avatar_options:
+            avatar_options[name] = config
+    
+    # Create tabs for different scenarios
+    tab1, tab2 = st.tabs(["👋 Pre-briefing with Noa Martinez", "🏥 Simulation: Meeting with Sam Richards"])
+    
+    with tab1:
+        st.header("Pre-briefing with Noa Martinez")
+        st.markdown("**Noa Martinez - Virtual Clinical Instructor**")
+        
+        # Voice configuration options
+        voice_options = {
+            "Friendly": {"voice_id": "default", "rate": 1.0, "emotion": "friendly"},
+            "Professional": {"voice_id": "default", "rate": 0.9, "emotion": "serious"},
+            "Enthusiastic": {"voice_id": "default", "rate": 1.1, "emotion": "excited"},
+            "Calm": {"voice_id": "default", "rate": 0.8, "emotion": "soothing"},
+        }
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            selected_avatar = st.selectbox(
+                "Choose Avatar for Noa:",
+                options=list(avatar_options.keys()),
+                key="noa_avatar"
+            )
+        with col2:
+            selected_voice = st.selectbox(
+                "Voice Style:",
+                options=list(voice_options.keys()),
+                key="noa_voice"
+            )
+        
+        if selected_avatar and selected_avatar in avatar_options:
+            avatar_config = avatar_options[selected_avatar]
+            voice_config = voice_options[selected_voice]
+            
+            # Create HeyGen component
+            noa_component = create_heygen_component(
+                access_token=access_token,
+                avatar_id=avatar_config["id"],
+                session_id="noa_session",
+                avatar_name="Noa Martinez",
+                voice_config=voice_config
+            )
+            
+            st.components.v1.html(noa_component, height=700, scrolling=True)
+        
+        # Scenario context
+        with st.expander("📋 Scenario Background", expanded=True):
+            st.markdown("""
+            **Pre-briefing Instructions:**
+            
+            In this scenario, you'll be playing the role of a public health nurse meeting with Sam Richards, 
+            an Operations Manager at a County Corrections Facility. Your goal is to discuss and negotiate the 
+            implementation of a new flu vaccination program for incarcerated individuals.
+            
+            **Key Learning Objectives:**
+            - Practice professional communication in challenging environments
+            - Develop negotiation skills for public health initiatives
+            - Understand the unique challenges of healthcare in correctional facilities
+            
+            **Character Background - Sam Richards:**
+            - 14 years experience in corrections management
+            - Generally resistant to change and new programs
+            - Focuses on security and operational concerns
+            - May be skeptical about healthcare initiatives
+            """)
+    
+    with tab2:
+        st.header("Simulation: Meeting with Sam Richards")
+        st.markdown("**Sam Richards - Operations Manager, County Corrections Facility**")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            selected_avatar_sam = st.selectbox(
+                "Choose Avatar for Sam:",
+                options=list(avatar_options.keys()),
+                key="sam_avatar",
+                index=1 if len(avatar_options) > 1 else 0
+            )
+        with col2:
+            selected_voice_sam = st.selectbox(
+                "Voice Style:",
+                options=list(voice_options.keys()),
+                key="sam_voice",
+                index=1  # Default to Professional for Sam
+            )
+        
+        if selected_avatar_sam and selected_avatar_sam in avatar_options:
+            avatar_config_sam = avatar_options[selected_avatar_sam]
+            voice_config_sam = voice_options[selected_voice_sam]
+            
+            # Create HeyGen component for Sam
+            sam_component = create_heygen_component(
+                access_token=access_token,
+                avatar_id=avatar_config_sam["id"],
+                session_id="sam_session",
+                avatar_name="Sam Richards",
+                voice_config=voice_config_sam
+            )
+            
+            st.components.v1.html(sam_component, height=700, scrolling=True)
+        
+        # Simulation context
+        with st.expander("🎯 Simulation Guidelines", expanded=True):
+            st.markdown("""
+            **Your Role:** Public Health Nurse
+            
+            **Objective:** Convince Sam Richards to implement a flu vaccination program
+            
+            **Expected Challenges:**
+            - Resistance to new procedures
+            - Concerns about cost and logistics
+            - Security and safety questions
+            - "We've always done it this way" mentality
+            
+            **Success Strategies:**
+            - Present clear health benefits
+            - Address operational concerns directly
+            - Propose phased implementation
+            - Emphasize regulatory compliance benefits
+            """)
+
+    # Usage instructions
+    with st.expander("📖 How to Use", expanded=False):
+        st.markdown("""
+        **Getting Started:**
+        1. Select an avatar from the dropdown
+        2. Click "Start Session" to initialize the avatar
+        3. Wait for the "Session started successfully!" message
+        4. Use "Speak Test" for a quick test, or type custom messages
+        5. Click "Stop Session" when finished
+        
+        **Troubleshooting:**
+        - If you see errors, try refreshing the page
+        - Make sure your HeyGen API key is properly configured
+        - Check the debug section for connection status
+        
+        **Features:**
+        - Real-time avatar interaction using HeyGen REST API
+        - Custom text input for role-playing scenarios
+        - Session logging and status tracking
+        - Multiple avatar and voice style options
+        - Configurable video quality and session settings
+        - Automatic session management and cleanup
+        
+        **Based on HeyGen StreamingAvatarSDK v2.0.14:**
+        - Full REST API integration
+        - Compatible with HeyGen's streaming avatar system
+        - Supports text-based interaction (voice chat requires WebRTC)
+        - Session lifecycle management following SDK patterns
+        """)
 
 if __name__ == "__main__":
     main()
