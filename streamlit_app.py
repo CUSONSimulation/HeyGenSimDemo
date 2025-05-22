@@ -37,7 +37,37 @@ def get_access_token():
         st.error(f"Error getting access token: {str(e)}")
         return None
 
-def get_available_avatars():
+def get_compatible_voices():
+    """Get list of voices compatible with streaming avatars"""
+    if not HEYGEN_API_KEY:
+        return {}
+    
+    try:
+        response = requests.get(
+            "https://api.heygen.com/v2/voices",
+            headers={"x-api-key": HEYGEN_API_KEY},
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            voices_data = response.json().get("data", {}).get("voices", [])
+            # Filter for voices that support streaming
+            compatible_voices = {}
+            for voice in voices_data:
+                if voice.get("support_streaming", True):  # Assume streaming support if not specified
+                    name = voice.get("name", "Unknown")
+                    compatible_voices[name] = {
+                        "voice_id": voice.get("voice_id"),
+                        "gender": voice.get("gender", "unknown"),
+                        "language": voice.get("language", "en")
+                    }
+            return compatible_voices
+        else:
+            st.warning(f"Could not fetch voices: {response.status_code}")
+            return {}
+    except Exception as e:
+        st.warning(f"Error fetching voices: {str(e)}")
+        return {}
     """Get list of available avatars"""
     if not HEYGEN_API_KEY:
         return []
@@ -75,8 +105,11 @@ def create_heygen_component(access_token, avatar_id, session_id, avatar_name, vo
             "emotion": "friendly"
         }
     
+    # Use a safe default voice if the provided one might not work
+    safe_voice_id = voice_id if voice_id != "default" else None
+    
     # This creates a pure HTML/JS implementation that uses the HeyGen REST API
-    # with enhanced session management based on the full SDK understanding
+    # with enhanced session management and token refresh capability
     component_html = f"""
     <!DOCTYPE html>
     <html>
@@ -268,25 +301,31 @@ def create_heygen_component(access_token, avatar_id, session_id, avatar_name, vo
                     updateStatus('Creating avatar session...', 'loading');
                     startBtn.disabled = true;
                     
-                    // Create the request payload
-                    const requestPayload = {{
+                    // Try with voice first, then fallback to no voice
+                    let requestPayload;
+                    
+                    const basePayload = {{
                         avatar_name: '{avatar_id}',
                         quality: 'low',
-                        voice: {{
-                            voice_id: '{voice_id}',
-                            rate: {voice_config.get("rate", 1.0)},
-                            emotion: '{voice_config.get("emotion", "friendly")}'
-                        }},
-                        version: 'v2',
-                        video_encoding: 'H264',
-                        source: 'streamlit-integration'
+                        version: 'v2'
                     }};
                     
-                    // Log the request for debugging
+                    // Only add voice if we have a specific voice ID
+                    if ('{safe_voice_id}' && '{safe_voice_id}' !== 'None') {{
+                        requestPayload = {{
+                            ...basePayload,
+                            voice: {{
+                                voice_id: '{safe_voice_id}',
+                                rate: {voice_config.get("rate", 1.0)}
+                            }}
+                        }};
+                    }} else {{
+                        requestPayload = basePayload;
+                    }}
+                    
                     log(`Request payload: ${{JSON.stringify(requestPayload, null, 2)}}`);
                     
-                    // Create new session
-                    const response = await fetch('https://api.heygen.com/v1/streaming.new', {{
+                    let response = await fetch('https://api.heygen.com/v1/streaming.new', {{
                         method: 'POST',
                         headers: {{
                             'Authorization': 'Bearer {access_token}',
@@ -295,13 +334,46 @@ def create_heygen_component(access_token, avatar_id, session_id, avatar_name, vo
                         body: JSON.stringify(requestPayload)
                     }});
                     
-                    // Log response details
                     log(`Response status: ${{response.status}}`);
                     
+                    // If unauthorized, the token might have expired - show error and suggest refresh
+                    if (response.status === 401) {{
+                        const errorText = await response.text();
+                        log(`Auth error: ${{errorText}}`);
+                        updateStatus('Authentication failed - please refresh the page', 'error');
+                        startBtn.disabled = false;
+                        return;
+                    }}
+                    
+                    // If voice not supported, try without voice
                     if (!response.ok) {{
                         const errorText = await response.text();
                         log(`Error response: ${{errorText}}`);
-                        throw new Error(`Session creation failed: ${{response.status}} - ${{errorText}}`);
+                        
+                        if (errorText.includes('voice_not_support')) {{
+                            log('Voice not supported, trying without voice...');
+                            const noVoicePayload = {{
+                                avatar_name: '{avatar_id}',
+                                quality: 'low',
+                                version: 'v2'
+                            }};
+                            
+                            response = await fetch('https://api.heygen.com/v1/streaming.new', {{
+                                method: 'POST',
+                                headers: {{
+                                    'Authorization': 'Bearer {access_token}',
+                                    'Content-Type': 'application/json'
+                                }},
+                                body: JSON.stringify(noVoicePayload)
+                            }});
+                            
+                            if (!response.ok) {{
+                                const retryError = await response.text();
+                                throw new Error(`Session creation failed: ${{response.status}} - ${{retryError}}`);
+                            }}
+                        }} else {{
+                            throw new Error(`Session creation failed: ${{response.status}} - ${{errorText}}`);
+                        }}
                     }}
                     
                     const data = await response.json();
@@ -585,14 +657,19 @@ def main():
         "Noa Martinez (June_HR)": {
             "id": "June_HR_public", 
             "description": "Virtual Clinical Instructor",
-            "voice_id": "c67d6fca1c3d4f55b81fcf9abc37d77f"
+            "voice_id": None  # Will use default compatible voice
         },
         "Sam Richards (Shawn_Therapist)": {
             "id": "Shawn_Therapist_public", 
             "description": "Operations Manager, County Corrections Facility",
-            "voice_id": "0f6610678bfa4a1eb827d128662dca11"
+            "voice_id": None  # Will use default compatible voice
         }
     }
+    
+    # Get compatible voices for selection
+    compatible_voices = get_compatible_voices()
+    if compatible_voices:
+        st.info(f"✅ Found {len(compatible_voices)} streaming-compatible voices")
     
     # Get available avatars for reference (optional)
     available_avatars = get_available_avatars()
@@ -607,7 +684,7 @@ def main():
                 avatar_options[f"{name} (Available)"] = {
                     "id": avatar.get('avatar_id'),
                     "description": avatar.get('description', 'Additional avatar'),
-                    "voice_id": "default"  # Use default voice for additional avatars
+                    "voice_id": None  # Use default voice for additional avatars
                 }
     
     # Create tabs for different scenarios
@@ -631,7 +708,7 @@ def main():
             noa_avatars = {k: v for k, v in avatar_options.items() if "Noa Martinez" in k}
             if not noa_avatars:
                 # Fallback if the specific avatar isn't found
-                noa_avatars = {"Noa Martinez (June_HR)": avatar_options.get("Noa Martinez (June_HR)", {"id": "June_HR_public", "voice_id": "c67d6fca1c3d4f55b81fcf9abc37d77f"})}
+                noa_avatars = {"Noa Martinez (June_HR)": avatar_options.get("Noa Martinez (June_HR)", {"id": "June_HR_public", "voice_id": None})}
             
             selected_avatar = st.selectbox(
                 "Choose Avatar for Noa:",
@@ -639,23 +716,38 @@ def main():
                 key="noa_avatar"
             )
         with col2:
-            selected_voice = st.selectbox(
-                "Voice Style:",
-                options=list(noa_voice_options.keys()),
-                key="noa_voice"
-            )
+            # Voice selection from compatible voices
+            if compatible_voices:
+                voice_options = ["Default (No specific voice)"] + list(compatible_voices.keys())
+                selected_voice_key = st.selectbox(
+                    "Voice Selection:",
+                    options=voice_options,
+                    key="noa_voice_selection"
+                )
+                
+                if selected_voice_key == "Default (No specific voice)":
+                    selected_voice_id = None
+                else:
+                    selected_voice_id = compatible_voices[selected_voice_key]["voice_id"]
+            else:
+                selected_voice_key = st.selectbox(
+                    "Voice Style:",
+                    options=list(noa_voice_options.keys()),
+                    key="noa_voice"
+                )
+                selected_voice_id = None
         
         if selected_avatar and selected_avatar in noa_avatars:
             avatar_config = noa_avatars[selected_avatar]
-            voice_config = noa_voice_options[selected_voice]
+            voice_config = noa_voice_options.get(selected_voice_key, noa_voice_options["Friendly"])
             
-            # Create HeyGen component for Noa with her specific voice ID
+            # Create HeyGen component for Noa with compatible voice
             noa_component = create_heygen_component(
                 access_token=access_token,
                 avatar_id=avatar_config["id"],
                 session_id="noa_session",
                 avatar_name="Noa Martinez",
-                voice_id=avatar_config.get("voice_id", "c67d6fca1c3d4f55b81fcf9abc37d77f"),
+                voice_id=selected_voice_id or "default",
                 voice_config=voice_config
             )
             
@@ -700,7 +792,7 @@ def main():
             sam_avatars = {k: v for k, v in avatar_options.items() if "Sam Richards" in k}
             if not sam_avatars:
                 # Fallback if the specific avatar isn't found
-                sam_avatars = {"Sam Richards (Shawn_Therapist)": avatar_options.get("Sam Richards (Shawn_Therapist)", {"id": "Shawn_Therapist_public", "voice_id": "0f6610678bfa4a1eb827d128662dca11"})}
+                sam_avatars = {"Sam Richards (Shawn_Therapist)": avatar_options.get("Sam Richards (Shawn_Therapist)", {"id": "Shawn_Therapist_public", "voice_id": None})}
             
             selected_avatar_sam = st.selectbox(
                 "Choose Avatar for Sam:",
@@ -708,24 +800,39 @@ def main():
                 key="sam_avatar"
             )
         with col2:
-            selected_voice_sam = st.selectbox(
-                "Voice Style:",
-                options=list(sam_voice_options.keys()),
-                key="sam_voice",
-                index=0  # Default to Professional for Sam
-            )
+            # Voice selection from compatible voices
+            if compatible_voices:
+                voice_options_sam = ["Default (No specific voice)"] + list(compatible_voices.keys())
+                selected_voice_key_sam = st.selectbox(
+                    "Voice Selection:",
+                    options=voice_options_sam,
+                    key="sam_voice_selection"
+                )
+                
+                if selected_voice_key_sam == "Default (No specific voice)":
+                    selected_voice_id_sam = None
+                else:
+                    selected_voice_id_sam = compatible_voices[selected_voice_key_sam]["voice_id"]
+            else:
+                selected_voice_key_sam = st.selectbox(
+                    "Voice Style:",
+                    options=list(sam_voice_options.keys()),
+                    key="sam_voice",
+                    index=0  # Default to Professional for Sam
+                )
+                selected_voice_id_sam = None
         
         if selected_avatar_sam and selected_avatar_sam in sam_avatars:
             avatar_config_sam = sam_avatars[selected_avatar_sam]
-            voice_config_sam = sam_voice_options[selected_voice_sam]
+            voice_config_sam = sam_voice_options.get(selected_voice_key_sam, sam_voice_options["Professional"])
             
-            # Create HeyGen component for Sam with his specific voice ID
+            # Create HeyGen component for Sam with compatible voice
             sam_component = create_heygen_component(
                 access_token=access_token,
                 avatar_id=avatar_config_sam["id"],
                 session_id="sam_session",
                 avatar_name="Sam Richards",
-                voice_id=avatar_config_sam.get("voice_id", "0f6610678bfa4a1eb827d128662dca11"),
+                voice_id=selected_voice_id_sam or "default",
                 voice_config=voice_config_sam
             )
             
