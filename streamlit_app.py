@@ -268,6 +268,23 @@ def create_heygen_component(access_token, avatar_id, session_id, avatar_name, vo
                     updateStatus('Creating avatar session...', 'loading');
                     startBtn.disabled = true;
                     
+                    // Create the request payload
+                    const requestPayload = {{
+                        avatar_name: '{avatar_id}',
+                        quality: 'low',
+                        voice: {{
+                            voice_id: '{voice_id}',
+                            rate: {voice_config.get("rate", 1.0)},
+                            emotion: '{voice_config.get("emotion", "friendly")}'
+                        }},
+                        version: 'v2',
+                        video_encoding: 'H264',
+                        source: 'streamlit-integration'
+                    }};
+                    
+                    // Log the request for debugging
+                    log(`Request payload: ${{JSON.stringify(requestPayload, null, 2)}}`);
+                    
                     // Create new session
                     const response = await fetch('https://api.heygen.com/v1/streaming.new', {{
                         method: 'POST',
@@ -275,26 +292,16 @@ def create_heygen_component(access_token, avatar_id, session_id, avatar_name, vo
                             'Authorization': 'Bearer {access_token}',
                             'Content-Type': 'application/json'
                         }},
-                        body: JSON.stringify({{
-                            avatar_name: '{avatar_id}',
-                            quality: 'low',
-                            voice: {{
-                                voice_id: '{voice_id}',
-                                rate: {voice_config.get("rate", 1.0)},
-                                emotion: '{voice_config.get("emotion", "friendly")}'
-                            }},
-                            version: 'v2',
-                            video_encoding: 'H264',
-                            source: 'streamlit-integration',
-                            stt_settings: {{
-                                provider: 'deepgram',
-                                confidence: 0.6
-                            }}
-                        }})
+                        body: JSON.stringify(requestPayload)
                     }});
                     
+                    // Log response details
+                    log(`Response status: ${{response.status}}`);
+                    
                     if (!response.ok) {{
-                        throw new Error(`Session creation failed: ${{response.status}}`);
+                        const errorText = await response.text();
+                        log(`Error response: ${{errorText}}`);
+                        throw new Error(`Session creation failed: ${{response.status}} - ${{errorText}}`);
                     }}
                     
                     const data = await response.json();
@@ -337,6 +344,69 @@ def create_heygen_component(access_token, avatar_id, session_id, avatar_name, vo
                     updateStatus(`Error: ${{error.message}}`, 'error');
                     startBtn.disabled = false;
                     log(`Error: ${{error.message}}`, 'error');
+                    
+                    // Try fallback with minimal parameters
+                    if (error.message.includes('400')) {{
+                        log('Attempting fallback with minimal parameters...');
+                        try {{
+                            const fallbackPayload = {{
+                                avatar_name: '{avatar_id}',
+                                quality: 'low'
+                            }};
+                            
+                            log(`Fallback payload: ${{JSON.stringify(fallbackPayload, null, 2)}}`);
+                            
+                            const fallbackResponse = await fetch('https://api.heygen.com/v1/streaming.new', {{
+                                method: 'POST',
+                                headers: {{
+                                    'Authorization': 'Bearer {access_token}',
+                                    'Content-Type': 'application/json'
+                                }},
+                                body: JSON.stringify(fallbackPayload)
+                            }});
+                            
+                            if (fallbackResponse.ok) {{
+                                const data = await fallbackResponse.json();
+                                sessionData = data.data;
+                                log(`Fallback session created: ${{sessionData.session_id}}`);
+                                updateStatus('Session created with fallback parameters', 'success');
+                                
+                                // Continue with session start
+                                const startResponse = await fetch('https://api.heygen.com/v1/streaming.start', {{
+                                    method: 'POST',
+                                    headers: {{
+                                        'Authorization': 'Bearer {access_token}',
+                                        'Content-Type': 'application/json'
+                                    }},
+                                    body: JSON.stringify({{
+                                        session_id: sessionData.session_id
+                                    }})
+                                }});
+                                
+                                if (startResponse.ok) {{
+                                    updateStatus('Session started successfully!', 'success');
+                                    isConnected = true;
+                                    speakBtn.disabled = false;
+                                    stopBtn.disabled = false;
+                                    chatInput.disabled = false;
+                                    sendBtn.disabled = false;
+                                    placeholderText.style.display = 'none';
+                                    videoElement.style.display = 'block';
+                                    log('Avatar is ready for interaction');
+                                }} else {{
+                                    const startError = await startResponse.text();
+                                    throw new Error(`Fallback session start failed: ${{startResponse.status}} - ${{startError}}`);
+                                }}
+                            }} else {{
+                                const fallbackError = await fallbackResponse.text();
+                                log(`Fallback also failed: ${{fallbackResponse.status}} - ${{fallbackError}}`);
+                                updateStatus('Both primary and fallback attempts failed', 'error');
+                            }}
+                        }} catch (fallbackError) {{
+                            log(`Fallback error: ${{fallbackError.message}}`, 'error');
+                            updateStatus('All session creation attempts failed', 'error');
+                        }}
+                    }}
                 }}
             }}
             
@@ -461,14 +531,47 @@ def main():
                     st.error("❌ No API Key found")
         
         with col2:
-            if st.button("Fetch Available Avatars"):
-                avatars = get_available_avatars()
-                if avatars:
-                    st.success(f"✅ Found {len(avatars)} avatars")
-                    for avatar in avatars[:5]:  # Show first 5
-                        st.write(f"• {avatar.get('name', 'Unknown')} (ID: {avatar.get('avatar_id', 'N/A')})")
+            if st.button("Test Avatar & Voice IDs"):
+                if HEYGEN_API_KEY:
+                    st.info("Testing your specific avatar and voice configurations...")
+                    
+                    # Test Noa's configuration
+                    st.write("**Testing Noa Martinez:**")
+                    st.write(f"- Avatar ID: `June_HR_public`")
+                    st.write(f"- Voice ID: `c67d6fca1c3d4f55b81fcf9abc37d77f`")
+                    
+                    # Test Sam's configuration  
+                    st.write("**Testing Sam Richards:**")
+                    st.write(f"- Avatar ID: `Shawn_Therapist_public`")
+                    st.write(f"- Voice ID: `0f6610678bfa4a1eb827d128662dca11`")
+                    
+                    # Test voice API
+                    try:
+                        voices_response = requests.get(
+                            "https://api.heygen.com/v2/voices",
+                            headers={"x-api-key": HEYGEN_API_KEY},
+                            timeout=10
+                        )
+                        if voices_response.status_code == 200:
+                            voices_data = voices_response.json().get("data", {}).get("voices", [])
+                            noa_voice_found = any(v.get("voice_id") == "c67d6fca1c3d4f55b81fcf9abc37d77f" for v in voices_data)
+                            sam_voice_found = any(v.get("voice_id") == "0f6610678bfa4a1eb827d128662dca11" for v in voices_data)
+                            
+                            if noa_voice_found:
+                                st.success("✅ Noa's voice ID found")
+                            else:
+                                st.warning("⚠️ Noa's voice ID not found in your account")
+                                
+                            if sam_voice_found:
+                                st.success("✅ Sam's voice ID found")
+                            else:
+                                st.warning("⚠️ Sam's voice ID not found in your account")
+                        else:
+                            st.warning("Could not check voice IDs")
+                    except Exception as e:
+                        st.warning(f"Voice check error: {e}")
                 else:
-                    st.warning("No avatars found")
+                    st.error("❌ No API Key found")
 
     # Get access token
     access_token = get_access_token()
